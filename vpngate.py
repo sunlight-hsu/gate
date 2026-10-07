@@ -12,6 +12,7 @@ VPN Gate SSTP 节点检测流水线 (精简版)
 
 import base64
 import csv
+import hashlib
 import io
 import json
 import os
@@ -20,7 +21,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import requests
 
@@ -41,6 +42,10 @@ VPNGATE_MIRROR = os.environ.get(
     "https://raw.githubusercontent.com/fdciabdul/Vpngate-Scraper-API/main/json/data.json",
 )
 WORKER_CHECK_URL = os.environ.get("CHECK_WORKER", "https://你的域名/check?sstp=vpn:vpn@")
+try:
+    _WORKER_NETLOC = urlsplit(WORKER_CHECK_URL).netloc
+except Exception:
+    _WORKER_NETLOC = ""
 CONCURRENCY = max(1, int(os.environ.get("CHECK_CONCURRENCY", "32")))
 CHECK_TIMEOUT = float(os.environ.get("CHECK_TIMEOUT", "90"))
 MAX_CHECK_NODES = int(os.environ.get("MAX_CHECK_NODES", "0"))
@@ -238,7 +243,12 @@ def check_one(node, session):
     try:
         r = session.get(url, timeout=CHECK_TIMEOUT, headers={"User-Agent": "Mozilla/5.0 (gate-checker)"})
         if r.status_code != 200:
-            out["error"] = f"HTTP {r.status_code}"
+            m = re.search(r"error code: (\d+)", r.text or "")
+            if m:
+                detail = f"cf-error={m.group(1)}"
+            else:
+                detail = " ".join((r.text or "").split())[:120].replace(_WORKER_NETLOC, "[host]")
+            out["error"] = f"HTTP {r.status_code} | {detail}"
             out["worker_error"] = True
             return out
         j = r.json()
@@ -375,6 +385,15 @@ def main():
     log("VPN GATE", f"获取原始节点: {raw_count}")
     log("VPN GATE", f"SSTP 节点: {sstp_count}")
     log("VPN GATE", f"去重后: {len(uniq)}")
+
+    try:
+        _p = urlsplit(WORKER_CHECK_URL)
+        _host_digest = hashlib.sha1(_p.netloc.encode("utf-8", "replace")).hexdigest()[:8]
+        log("CLOUDFLARE WORKER", f"CHECK_WORKER 结构: len={len(WORKER_CHECK_URL)} https={str(_p.scheme == 'https')} "
+            f"workers_dev={str(_p.netloc.endswith('.workers.dev'))} path_ok={str(_p.path == '/check')} "
+            f"query_ok={str(_p.query.startswith('sstp='))} netloc_sha1_8={_host_digest}")
+    except Exception as exc:
+        log("CLOUDFLARE WORKER", f"CHECK_WORKER 结构: 解析异常 {type(exc).__name__} (len={len(WORKER_CHECK_URL)})")
 
     log("CLOUDFLARE WORKER", f"提交检测: {len(uniq)} (并发 {CONCURRENCY}, 单请求超时 {CHECK_TIMEOUT}s)")
     t0 = time.time()

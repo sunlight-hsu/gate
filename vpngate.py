@@ -389,6 +389,10 @@ def main():
     log("CLOUDFLARE WORKER", f"检测失败: {len(failed)}" + (f" (其中 Worker 异常 {len(worker_errors)})" if worker_errors else ""))
     log("CLOUDFLARE WORKER", f"耗时: {elapsed:.1f}s")
 
+    for sample in failed[:5]:
+        err = str(sample.get("error") or "unknown")[:200]
+        log("CLOUDFLARE WORKER", f"错误样本 [{sample['host']}:{sample['port']}]: {err}")
+
     if uniq and not success and len(worker_errors) == len(uniq):
         die("Worker 全部请求异常, 检测服务不可用 — 本次运行判定失败 (不生成空结果)")
 
